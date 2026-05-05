@@ -67,6 +67,7 @@ public:
 	// Should this object cast shadows?
 	virtual ShadowType_t		ShadowCastType( void );
 	virtual C_BaseAnimating *BecomeRagdollOnClient();
+	virtual C_BaseAnimating *GetRenderedWeaponModel();
 	virtual const QAngle& GetRenderAngles();
 	virtual bool ShouldDraw( void );
 	virtual void OnDataChanged( DataUpdateType_t type );
@@ -97,7 +98,7 @@ public:
 	bool SuitPower_RemoveDevice( const CSuitPowerDevice& device );
 	bool SuitPower_ShouldRecharge( void );
 	float SuitPower_GetCurrentPercentage( void ) { return m_HL2Local.m_flSuitPower; }
-	
+	CMultiPlayerAnimState *GetAnimState() { return m_pAnimState; }
 	bool	CanSprint( void );
 	void	StartSprinting( void );
 	void	StopSprinting( void );
@@ -122,7 +123,7 @@ private:
 	
 	C_JBMod_Player( const C_JBMod_Player & );
 
-	CPlayerAnimState m_PlayerAnimState;
+	CMultiPlayerAnimState *m_pAnimState;
 
 	QAngle	m_angEyeAngles;
 
@@ -201,3 +202,4 @@ private:
 };
 
 #endif //JBMOD_PLAYER_H
+
