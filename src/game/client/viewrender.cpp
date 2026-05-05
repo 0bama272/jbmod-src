@@ -186,6 +186,7 @@ static VMatrix g_matCurrentCamInverse;
 bool s_bCanAccessCurrentView = false;
 IntroData_t *g_pIntroData = NULL;
 static bool	g_bRenderingView = false;			// For debugging...
+extern bool g_bRenderingCameraView;				
 static int g_CurrentViewID = VIEW_NONE;
 bool g_bRenderingScreenshot = false;
 
@@ -981,6 +982,8 @@ bool CViewRender::ShouldDrawViewModel( bool bDrawViewmodel )
 	if ( !r_drawviewmodel.GetBool() )
 		return false;
 
+
+
 	if ( C_BasePlayer::ShouldDrawLocalPlayer() )
 		return false;
 
@@ -1440,8 +1443,10 @@ void CViewRender::ViewDrawScene( bool bDrew3dSkybox, SkyboxVisibility_t nSkyboxV
 	// render->DrawMaskEntities()
 
 	// Here are the overlays...
-
-	CGlowOverlay::DrawOverlays( viewRender.m_bCacheFullSceneState );
+if ( viewID != VIEW_MONITOR )
+{
+    CGlowOverlay::DrawOverlays( viewRender.m_bCacheFullSceneState );
+}
 
 	// issue the pixel visibility tests
 	if ( IsMainView( CurrentViewID() ) )
@@ -1460,7 +1465,10 @@ void CViewRender::ViewDrawScene( bool bDrew3dSkybox, SkyboxVisibility_t nSkyboxV
 
 	// Draw client side effects
 	// NOTE: These are not sorted against the rest of the frame
-	clienteffects->DrawEffects( gpGlobals->frametime );	
+if ( viewID != VIEW_MONITOR )
+{
+	clienteffects->DrawEffects( gpGlobals->frametime );
+}
 
 	// Mark the frame as locked down for client fx additions
 	SetFXCreationAllowed( false );
@@ -3217,12 +3225,52 @@ bool CViewRender::DrawOneMonitor( ITexture *pRenderTarget, int cameraNum, C_Poin
 	monitorView.m_bOrtho = false;
 	monitorView.m_flAspectRatio = pCameraEnt->UseScreenAspectRatio() ? 0.0f : 1.0f;
 	monitorView.m_bViewToProjectionOverride = false;
-
+	extern bool g_bRenderingCameraView; 
 	// @MULTICORE (toml 8/11/2006): this should be a renderer....
-	Frustum frustum;
- 	render->Push3DView( monitorView, VIEW_CLEAR_DEPTH | VIEW_CLEAR_COLOR, pRenderTarget, (VPlane *)frustum );
-	ViewDrawScene( false, SKYBOX_2DSKYBOX_VISIBLE, monitorView, 0, VIEW_MONITOR );
- 	render->PopView( frustum );
+Frustum frustum;
+render->Push3DView( monitorView, VIEW_CLEAR_DEPTH | VIEW_CLEAR_COLOR, pRenderTarget, (VPlane *)frustum );
+{
+    CMatRenderContextPtr pRenderContext( materials );
+    pRenderContext->ClearColor4ub( 0, 0, 0, 255 );
+    pRenderContext->ClearBuffers( true, true, true );
+}
+
+C_BasePlayer *pLocal = C_BasePlayer::GetLocalPlayer();
+bool bOldForceDraw = false;
+
+if ( pLocal )
+{
+	bOldForceDraw = pLocal->m_Local.m_bForceLocalPlayerDraw;
+	pLocal->m_Local.m_bForceLocalPlayerDraw = true;
+}
+
+
+
+bool bOldRenderingCameraView = g_bRenderingCameraView;
+g_bRenderingCameraView = true;
+
+
+if ( pLocal && pLocal->GetActiveWeapon() )
+{
+	pLocal->GetActiveWeapon()->JBMod_PrepareForCameraRender();
+}
+
+
+ViewDrawScene( false, SKYBOX_2DSKYBOX_VISIBLE, monitorView, 0, VIEW_MONITOR, false );
+
+g_bRenderingCameraView = bOldRenderingCameraView;
+
+if ( pLocal )
+{
+	pLocal->m_Local.m_bForceLocalPlayerDraw = bOldForceDraw;
+}
+
+render->PopView( frustum );
+
+
+
+
+
 
 	// Reset the world fog parameters.
 	if ( fogEnabled )
@@ -3250,9 +3298,11 @@ void CViewRender::DrawMonitors( const CViewSetup &cameraView )
 	if ( !pCameraEnt )
 		return;
 
+
+	
+
 	tmZone( TELEMETRY_LEVEL0, TMZF_NONE, "%s", __FUNCTION__ );
 
-	g_bRenderingCameraView = true;
 
 	// FIXME: this should check for the ability to do a render target maybe instead.
 	// FIXME: shouldn't have to truck through all of the visible entities for this!!!!
@@ -3959,7 +4009,9 @@ static inline void DrawOpaqueRenderable( IClientRenderable *pEnt, bool bTwoPass,
 	{
 		CMatRenderContextPtr pRenderContext( materials );
 		if( !materials->UsingFastClipping() ) //do NOT change the fast clip plane mid-scene, depth problems result. Regular user clip planes are fine though
-			pRenderContext->PushCustomClipPlane( pRenderClipPlane );
+		{
+			//	pRenderContext->PushCustomClipPlane( pRenderClipPlane );
+		}
 		else
 			DrawClippedDepthBox( pEnt, pRenderClipPlane );
 		Assert( view->GetCurrentlyDrawingEntity() == NULL );
@@ -3967,7 +4019,9 @@ static inline void DrawOpaqueRenderable( IClientRenderable *pEnt, bool bTwoPass,
 		pEnt->DrawModel( flags );
 		view->SetCurrentlyDrawingEntity( NULL );
 		if( pRenderClipPlane && !materials->UsingFastClipping() )	
-			pRenderContext->PopCustomClipPlane();
+		{
+					//	pRenderContext->PopCustomClipPlane();
+		}
 	}
 	else
 	{
@@ -6258,6 +6312,15 @@ void CUnderWaterView::CRefractionView::Draw()
 //-----------------------------------------------------------------------------
 // Draws the scene when the view contains reflective glass
 //-----------------------------------------------------------------------------
+
+
+void CViewRender::JBMod_DrawViewModelsForReflection( const CViewSetup &viewRender )
+{
+    DrawViewModels( viewRender, true );
+}
+
+
+
 void CReflectiveGlassView::Setup( const CViewSetup &viewRender, int nClearFlags, bool bDrawSkybox,
 	const VisibleFogVolumeInfo_t &fogInfo, const WaterRenderInfo_t &waterInfo, const cplane_t &reflectionPlane )
 {
@@ -6323,12 +6386,51 @@ void CReflectiveGlassView::Draw()
 	PIXEVENT( pRenderContext, "CReflectiveGlassView::Draw" );
 
 	// Disable occlusion visualization in reflection
-	bool bVisOcclusion = r_visocclusion.GetInt();
-	r_visocclusion.SetValue( 0 );
-				   
-	BaseClass::Draw();
+bool bVisOcclusion = r_visocclusion.GetInt();
+r_visocclusion.SetValue( 0 );
 
-	r_visocclusion.SetValue( bVisOcclusion );
+
+
+C_BasePlayer *pLocal = C_BasePlayer::GetLocalPlayer();
+bool bOldForceDraw = false;
+
+if ( pLocal )
+{
+    bOldForceDraw = pLocal->m_Local.m_bForceLocalPlayerDraw;
+    pLocal->m_Local.m_bForceLocalPlayerDraw = true;
+
+    if ( pLocal->GetActiveWeapon() )
+        pLocal->GetActiveWeapon()->JBMod_PrepareForCameraRender();
+}
+
+
+
+
+//bool bOldCameraView = g_bRenderingCameraView;
+//bool bOldReflectionView = g_bRenderingReflectionView;
+
+//g_bRenderingCameraView = true;
+//g_bRenderingReflectionView = true;
+
+BaseClass::Draw();
+if ( pLocal && pLocal->GetActiveWeapon() )
+{
+    pLocal->GetActiveWeapon()->DrawModel( STUDIO_RENDER );
+}
+
+
+
+//g_bRenderingReflectionView = bOldReflectionView;
+//g_bRenderingCameraView = bOldCameraView;
+
+if ( pLocal )
+{
+    pLocal->m_Local.m_bForceLocalPlayerDraw = bOldForceDraw;
+}
+
+
+
+r_visocclusion.SetValue( bVisOcclusion );
 
 	pRenderContext->ClearColor4ub( 0, 0, 0, 255 );
 	pRenderContext->Flush();
@@ -6396,3 +6498,4 @@ void CRefractiveGlassView::Draw()
 	pRenderContext->ClearColor4ub( 0, 0, 0, 255 );
 	pRenderContext->Flush();
 }
+
