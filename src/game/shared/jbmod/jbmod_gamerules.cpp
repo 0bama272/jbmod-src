@@ -855,6 +855,7 @@ void CJBModRules::ClientSettingsChanged( CBasePlayer *pPlayer )
 
 			Q_snprintf( szReturnString, sizeof( szReturnString ), "Please wait %d more seconds before trying to switch.\n", (int)(pHL2Player->GetNextModelChangeTime() - gpGlobals->curtime) );
 			ClientPrint( pHL2Player, HUD_PRINTTALK, szReturnString );
+			pHL2Player->ScriptSetPlayerModel( szModelName );
 			return;
 		}
 
