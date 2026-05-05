@@ -17,6 +17,10 @@
 #include "toolframework/itoolframework.h"
 #include "toolframework_client.h"
 
+extern bool g_bRenderingCameraView;
+
+
+
 // memdbgon must be the last include file in a .cpp file!!!
 #include "tier0/memdbgon.h"
 
@@ -53,12 +57,18 @@ void C_BaseCombatWeapon::SetDormant( bool bDormant )
 	BaseClass::SetDormant( bDormant );
 }
 
+
+
+
+
 //-----------------------------------------------------------------------------
 // Purpose: 
 //-----------------------------------------------------------------------------
 void C_BaseCombatWeapon::NotifyShouldTransmit( ShouldTransmitState_t state )
 {
 	BaseClass::NotifyShouldTransmit(state);
+
+
 
 	if (state == SHOULDTRANSMIT_END)
 	{
@@ -132,6 +142,9 @@ void C_BaseCombatWeapon::OnDataChanged( DataUpdateType_t updateType )
 {
 	BaseClass::OnDataChanged(updateType);
 
+
+
+
 	CHandle< C_BaseCombatWeapon > handle = this;
 
 	// If it's being carried by the *local* player, on the first update,
@@ -142,6 +155,30 @@ void C_BaseCombatWeapon::OnDataChanged( DataUpdateType_t updateType )
 
 	// check if weapon is carried by local player
 	bool bIsLocalPlayer = pPlayer && pPlayer == pOwner;
+
+
+
+if ( bIsLocalPlayer && !g_bRenderingCameraView  )
+{
+	int iWorldModel = GetWorldModelIndex();
+
+	if ( iWorldModel > 0 && GetModelIndex() != iWorldModel )
+	{
+		SetModelIndex( iWorldModel );
+	}
+
+	if ( m_iState == WEAPON_IS_ACTIVE )
+	{
+		RemoveEffects( EF_NODRAW );
+
+
+	}
+}
+
+
+
+
+
 	if ( bIsLocalPlayer && ShouldDrawLocalPlayerViewModel() )		// TODO: figure out the purpose of the ShouldDrawLocalPlayer() test.
 	{
 		// If I was just picked up, or created & immediately carried, add myself to this client's list of weapons
@@ -160,14 +197,24 @@ void C_BaseCombatWeapon::OnDataChanged( DataUpdateType_t updateType )
 			}
 		}
 	}
-	else // weapon carried by other player or not at all
+else // weapon carried by other player or not at all
+{
+	int overrideModelIndex;
+
+	if ( g_bRenderingCameraView  )
 	{
-		int overrideModelIndex = CalcOverrideModelIndex();
-		if( overrideModelIndex != -1 && overrideModelIndex != GetModelIndex() )
-		{
-			SetModelIndex( overrideModelIndex );
-		}
+    overrideModelIndex = GetWorldModelIndex();
 	}
+	else
+	{
+		overrideModelIndex = CalcOverrideModelIndex();
+	}
+
+	if( overrideModelIndex != -1 && overrideModelIndex != GetModelIndex() )
+	{
+		SetModelIndex( overrideModelIndex );
+	}
+}
 
 	if ( updateType == DATA_UPDATE_CREATED )
 	{
@@ -330,9 +377,18 @@ bool C_BaseCombatWeapon::IsCarriedByLocalPlayer( void )
 // Purpose: Returns true if this client is carrying this weapon and is
 //			using the view models
 //-----------------------------------------------------------------------------
-bool C_BaseCombatWeapon::ShouldDrawUsingViewModel( void )
+bool C_BaseCombatWeapon::ShouldDrawUsingViewModel()
 {
-	return IsCarriedByLocalPlayer() && !C_BasePlayer::ShouldDrawLocalPlayer();
+
+
+    // Camera stuff I added
+    if ( g_bRenderingCameraView && IsCarriedByLocalPlayer() )
+        return ( m_iState == WEAPON_IS_ACTIVE );
+
+    if ( g_bRenderingCameraView )
+        return false;
+
+    return IsCarriedByLocalPlayer() && !C_BasePlayer::ShouldDrawLocalPlayer();
 }
 
 
@@ -341,7 +397,7 @@ bool C_BaseCombatWeapon::ShouldDrawUsingViewModel( void )
 //-----------------------------------------------------------------------------
 bool C_BaseCombatWeapon::IsActiveByLocalPlayer( void )
 {
-	if ( IsCarriedByLocalPlayer() )
+	if ( IsCarriedByLocalPlayer() && !g_bRenderingCameraView  )
 	{
 		return (m_iState == WEAPON_IS_ACTIVE);
 	}
@@ -398,12 +454,29 @@ bool C_BaseCombatWeapon::GetShootPosition( Vector &vOrigin, QAngle &vAngles )
 }
 
 
+// Adds the weapon to the leaf system basically 
+void C_BaseCombatWeapon::JBMod_PrepareForCameraRender()
+{
+    JBMod_ForceWorldModelForSecondaryView(); 
+
+    RemoveFromLeafSystem();
+    AddToLeafSystem( RENDER_GROUP_OPAQUE_ENTITY );
+}
+
+
 //-----------------------------------------------------------------------------
 // Purpose: 
 // Output : Returns true on success, false on failure.
 //-----------------------------------------------------------------------------
 bool C_BaseCombatWeapon::ShouldDraw( void )
 {
+
+
+
+
+
+
+
 	if ( m_iWorldModelIndex == 0 )
 		return false;
 
@@ -423,28 +496,30 @@ bool C_BaseCombatWeapon::ShouldDraw( void )
 
 	C_BasePlayer *pLocalPlayer = C_BasePlayer::GetLocalPlayer();
 
-	 // carried by local player?
-	if ( pOwner == pLocalPlayer )
-	{
-		// Only ever show the active weapon
-		if ( !bIsActive )
-			return false;
+if ( pOwner == pLocalPlayer )
+{
 
-		if ( !pOwner->ShouldDraw() )
-		{
-			// Our owner is invisible.
-			// This also tests whether the player is zoomed in, in which case you don't want to draw the weapon.
-			return false;
-		}
 
-		// 3rd person mode?
-		if ( !ShouldDrawLocalPlayerViewModel() )
-			return true;
-
-		// don't draw active weapon if not in some kind of 3rd person mode, the viewmodel will do that
+	if ( !bIsActive )
 		return false;
-	}
 
+
+
+
+
+
+
+	if ( g_bRenderingCameraView )
+		return true;
+
+	if ( !pOwner->ShouldDraw() )
+		return false;
+
+	if ( !ShouldDrawLocalPlayerViewModel() )
+		return true;
+
+	return false;
+}
 	// If it's a player, then only show active weapons
 	if ( pOwner->IsPlayer() )
 	{
@@ -470,6 +545,33 @@ bool C_BaseCombatWeapon::ShouldDrawPickup( void )
 
 	return true;
 }
+
+
+// I probably should move this somewhere else in the file
+
+void C_BaseCombatWeapon::JBMod_ForceWorldModelForSecondaryView()
+{
+    if ( !IsCarriedByLocalPlayer() )
+        return;
+
+    if ( m_iState != WEAPON_IS_ACTIVE )
+        return;
+
+    int iWorldModel = GetWorldModelIndex();
+
+    if ( iWorldModel > 0 && GetModelIndex() != iWorldModel )
+    {
+        SetModelIndex( iWorldModel );
+    }
+
+    RemoveEffects( EF_NODRAW );
+}
+
+
+
+
+
+
 		   
 //-----------------------------------------------------------------------------
 // Purpose: Render the weapon. Draw the Viewmodel if the weapon's being carried
@@ -478,26 +580,23 @@ bool C_BaseCombatWeapon::ShouldDrawPickup( void )
 int C_BaseCombatWeapon::DrawModel( int flags )
 {
 	VPROF_BUDGET( "C_BaseCombatWeapon::DrawModel", VPROF_BUDGETGROUP_MODEL_RENDERING );
+
+
+
+
 	if ( !m_bReadyToDraw )
 		return 0;
 
 	if ( !IsVisible() )
 		return 0;
 
-	// check if local player chases owner of this weapon in first person
-	C_BasePlayer *localplayer = C_BasePlayer::GetLocalPlayer();
 
-	if ( localplayer && localplayer->IsObserver() && GetOwner() )
-	{
-		// don't draw weapon if chasing this guy as spectator
-		// we don't check that in ShouldDraw() since this may change
-		// without notification 
-		
-		if ( localplayer->GetObserverMode() == OBS_MODE_IN_EYE &&
-			 localplayer->GetObserverTarget() == GetOwner() ) 
-			return false;
-	}
 
+
+if ( ( g_bRenderingCameraView  ) && IsCarriedByLocalPlayer() )
+{
+    JBMod_PrepareForCameraRender();
+}
 	return BaseClass::DrawModel( flags );
 }
 
@@ -510,17 +609,28 @@ int C_BaseCombatWeapon::DrawModel( int flags )
 //-----------------------------------------------------------------------------
 int C_BaseCombatWeapon::CalcOverrideModelIndex() 
 { 
-	C_BasePlayer *localplayer = C_BasePlayer::GetLocalPlayer();
-	if ( localplayer && 
-		localplayer == GetOwner() &&
-		ShouldDrawLocalPlayerViewModel() )
-	{
-		return BaseClass::CalcOverrideModelIndex();
-	}
-	else
-	{
-		return GetWorldModelIndex();
-	}
+    C_BasePlayer *localplayer = C_BasePlayer::GetLocalPlayer();
+
+
+
+
+
+if ( localplayer &&
+     localplayer == GetOwner() &&
+     ShouldDrawLocalPlayerViewModel() &&
+     !g_bRenderingCameraView  )
+{
+    return BaseClass::CalcOverrideModelIndex();
+}
+
+if ( IsCarriedByLocalPlayer() && C_BasePlayer::ShouldDrawLocalPlayer() )
+{
+    return GetWorldModelIndex();
+}
+
+
+
+return GetWorldModelIndex();
 }
 
 bool C_BaseCombatWeapon::PredictionErrorShouldResetLatchedForAllPredictables( void )
