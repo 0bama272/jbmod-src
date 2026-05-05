@@ -8,18 +8,27 @@
 #include "vcollide_parse.h"
 #include "c_jbmod_player.h"
 #include "view.h"
+#include "viewrender.h"
 #include "takedamageinfo.h"
 #include "jbmod_gamerules.h"
 #include "in_buttons.h"
 #include "iviewrender_beams.h"			// flashlight beam
 #include "r_efx.h"
 #include "dlight.h"
-
+#include "input.h"
 // Don't alias here
+
+
+
+
 #if defined( CJBMod_Player )
 #undef CJBMod_Player	
 #endif
 
+extern bool g_bRenderingCameraView;
+
+extern view_id_t CurrentViewID();
+extern bool IsCurrentViewAccessAllowed();
 // misyl: Can be set to Msg if you want some info for debugging prediction
 #define MsgPredTest(...)
 #define MsgPredTest2(...)
@@ -68,6 +77,9 @@ BEGIN_PREDICTION_DATA( C_JBMod_Player )
 	DEFINE_PRED_ARRAY( m_iAmmo, FIELD_INTEGER, MAX_AMMO_TYPES, FTYPEDESC_INSENDTABLE | FTYPEDESC_OVERRIDE | FTYPEDESC_NOERRORCHECK ),
 END_PREDICTION_DATA()
 
+
+
+
 ConVar hl2_walkspeed( "hl2_walkspeed", "150", FCVAR_REPLICATED );
 ConVar hl2_normspeed( "hl2_normspeed", "190", FCVAR_REPLICATED );
 ConVar hl2_sprintspeed( "hl2_sprintspeed", "320", FCVAR_REPLICATED );
@@ -99,7 +111,7 @@ void SpawnBlood (Vector vecSpot, const Vector &vecDir, int bloodColor, float flD
 #endif
 CSuitPowerDevice SuitDeviceBreather( bits_SUIT_DEVICE_BREATHER, 6.7f );		// 100 units in 15 seconds (plus three padded seconds)
 
-C_JBMod_Player::C_JBMod_Player() : m_PlayerAnimState( this ), m_iv_angEyeAngles( "C_JBMod_Player::m_iv_angEyeAngles" )
+C_JBMod_Player::C_JBMod_Player(): m_pAnimState( NULL ), m_iv_angEyeAngles( "C_JBMod_Player::m_iv_angEyeAngles" )
 {
 	m_iIDEntIndex = 0;
 	m_iSpawnInterpCounterCache = 0;
@@ -113,11 +125,27 @@ C_JBMod_Player::C_JBMod_Player() : m_PlayerAnimState( this ), m_iv_angEyeAngles(
 
 	m_pFlashlightBeam = NULL;
 
+
+MultiPlayerMovementData_t movementData;
+movementData.m_flWalkSpeed = HL2_WALK_SPEED;
+movementData.m_flRunSpeed = HL2_NORM_SPEED;
+movementData.m_flSprintSpeed = HL2_SPRINT_SPEED;
+movementData.m_flBodyYawRate = 720.0f;
+
+m_pAnimState = new CMultiPlayerAnimState( this, movementData );
+
+
 	SuitPower_Initialize();
 }
 
 C_JBMod_Player::~C_JBMod_Player( void )
 {
+if ( m_pAnimState )
+	{
+		m_pAnimState->Release();
+		m_pAnimState = NULL;
+	}
+
 	ReleaseFlashlight();
 }
 
@@ -326,15 +354,29 @@ void C_JBMod_Player::ClientThink( void )
 //-----------------------------------------------------------------------------
 int C_JBMod_Player::DrawModel( int flags )
 {
-	if ( !m_bReadyToDraw )
-		return 0;
 
-    return BaseClass::DrawModel(flags);
+
+    return BaseClass::DrawModel( flags );
 }
-
 //-----------------------------------------------------------------------------
 // Should this object receive shadows?
 //-----------------------------------------------------------------------------
+
+
+C_BaseAnimating *C_JBMod_Player::GetRenderedWeaponModel()
+{
+
+	
+	if ( g_bRenderingCameraView  )
+	{
+		return GetActiveWeapon();
+	}
+
+	return BaseClass::GetRenderedWeaponModel();
+}
+
+
+
 bool C_JBMod_Player::ShouldReceiveProjectedTextures( int flags )
 {
 	Assert( flags & SHADOW_FLAGS_PROJECTED_TEXTURE_TYPE_MASK );
@@ -578,12 +620,13 @@ void C_JBMod_Player::AddEntity( void )
 {
 	BaseClass::AddEntity();
 
-	QAngle vTempAngles = GetLocalAngles();
-	vTempAngles[PITCH] = m_angEyeAngles[PITCH];
+//	QAngle vTempAngles = GetLocalAngles();
+//	vTempAngles[PITCH] = m_angEyeAngles[PITCH];
 
-	SetLocalAngles( vTempAngles );
+//	SetLocalAngles( vTempAngles );
 		
-	m_PlayerAnimState.Update();
+	if ( m_pAnimState )
+//	m_pAnimState->Update( EyeAngles().y, EyeAngles().x );
 
 	// Zero out model pitch, blending takes care of all of it.
 	SetLocalAnglesDim( X_INDEX, 0 );
@@ -674,34 +717,43 @@ ShadowType_t C_JBMod_Player::ShadowCastType( void )
 
 const QAngle& C_JBMod_Player::GetRenderAngles()
 {
-	if ( IsRagdoll() )
-	{
-		return vec3_angle;
-	}
-	else
-	{
-		return m_PlayerAnimState.GetRenderAngles();
-	}
+return BaseClass::GetRenderAngles();
 }
 
+
+
+// Modified this to make it work with my camera variable
 bool C_JBMod_Player::ShouldDraw( void )
 {
-	// If we're dead, our ragdoll will be drawn for us instead.
 	if ( !IsAlive() )
 		return false;
 
-//	if( GetTeamNumber() == TEAM_SPECTATOR )
-//		return false;
-
-	if( IsLocalPlayer() && IsRagdoll() )
-		return true;
-	
 	if ( IsRagdoll() )
 		return false;
 
-	return BaseClass::ShouldDraw();
+	if ( IsLocalPlayer() )
+	{
+		// Thirdperson always draw, should be okay
+		if ( input->CAM_IsThirdPerson() )
+			return true;
+
+
+		if ( !GetViewModel() )
+			return true;
+
+	
+		return true;
+	}
+
+if ( g_bRenderingCameraView )
+{
+	return true;
 }
 
+
+
+	return BaseClass::ShouldDraw();
+}
 void C_JBMod_Player::NotifyShouldTransmit( ShouldTransmitState_t state )
 {
 	if ( state == SHOULDTRANSMIT_END )
